@@ -14,7 +14,7 @@ const router = express.Router();
 const VALID_COMBOS = {
   nin_verification: ['nin', 'phone', 'demographic'],
   bvn_verification: ['bvn'],
-  nin_modification: ['name', 'phone']
+  nin_modification: ['name', 'phone', 'address', 'dob']
 };
 // Methods with a real, automated Prembly lookup behind them. Everything
 // else queues for manual handling but still charges — you're paying for
@@ -30,7 +30,7 @@ router.post('/', requireAuth, async (req, res) => {
   const {
     service_type, request_type, method, full_name, phone,
     reference_input, surname, firstname, middlename, date_of_birth,
-    new_phone_number, picture_base64
+    new_phone_number, new_address, picture_base64
   } = req.body || {};
 
   const comboKey = `${service_type}_${request_type}`;
@@ -39,8 +39,21 @@ router.post('/', requireAuth, async (req, res) => {
   if (!validMethods.includes(method)) {
     throw new AppError(400, `Invalid method for ${comboKey}. Expected one of: ${validMethods.join(', ')}`);
   }
-  if (!isReasonableText(full_name, { min: 2, max: 120 })) throw new AppError(400, 'A valid full name is required');
-  if (!isReasonableText(phone, { min: 7, max: 20 })) throw new AppError(400, 'A valid phone number is required');
+
+  // Verification searches don't ask for the requester's name/phone on the
+  // frontend anymore (already known from the logged-in account) — default
+  // to the account's own details here too, as a second line of defense in
+  // case a request ever arrives without them.
+  let effectiveFullName = full_name;
+  let effectivePhone = phone;
+  if (request_type === 'verification' && (!effectiveFullName || !effectivePhone)) {
+    const userRes = await pool.query('SELECT full_name, phone FROM users WHERE id = $1', [req.user.id]);
+    effectiveFullName = effectiveFullName || userRes.rows[0].full_name;
+    effectivePhone = effectivePhone || userRes.rows[0].phone;
+  }
+
+  if (!isReasonableText(effectiveFullName, { min: 2, max: 120 })) throw new AppError(400, 'A valid full name is required');
+  if (!isReasonableText(effectivePhone, { min: 7, max: 20 })) throw new AppError(400, 'A valid phone number is required');
 
   // TODO (once an email provider is connected): require req.user to have
   // email_verified = true before allowing a paid request. Deliberately not
@@ -63,6 +76,12 @@ router.post('/', requireAuth, async (req, res) => {
     }
     if (method === 'phone' && !isReasonableText(new_phone_number, { min: 7, max: 20 })) {
       throw new AppError(400, 'The new phone number is required');
+    }
+    if (method === 'address' && !isReasonableText(new_address, { min: 5, max: 500 })) {
+      throw new AppError(400, 'The corrected address is required');
+    }
+    if (method === 'dob' && !isReasonableText(date_of_birth, { max: 20 })) {
+      throw new AppError(400, 'The corrected date of birth is required');
     }
   }
 
@@ -109,15 +128,15 @@ router.post('/', requireAuth, async (req, res) => {
     const inserted = await client.query(
       `INSERT INTO service_requests
         (user_id, service_type, request_type, method, full_name, phone, reference_input,
-         surname, firstname, middlename, date_of_birth, new_phone_number, picture_base64,
+         surname, firstname, middlename, date_of_birth, new_phone_number, new_address, picture_base64,
          verification_result, reference_code, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING id, user_id, service_type, request_type, method, full_name, phone, reference_input,
-         surname, firstname, middlename, date_of_birth, new_phone_number, verification_result,
+         surname, firstname, middlename, date_of_birth, new_phone_number, new_address, verification_result,
          reference_code, status, created_at, updated_at`, // picture_base64 deliberately never echoed back
-      [req.user.id, service_type, request_type, method, cleanText(full_name), cleanText(phone), reference_input || null,
+      [req.user.id, service_type, request_type, method, cleanText(effectiveFullName), cleanText(effectivePhone), reference_input || null,
        surname || null, firstname || null, middlename || null, date_of_birth || null,
-       new_phone_number || null, picture_base64 || null, verification_result, reference_code, status]
+       new_phone_number || null, new_address || null, picture_base64 || null, verification_result, reference_code, status]
     );
     const request = inserted.rows[0];
 
@@ -145,7 +164,7 @@ router.post('/', requireAuth, async (req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   const result = await pool.query(
     `SELECT id, user_id, service_type, request_type, method, full_name, phone, reference_input,
-      surname, firstname, middlename, date_of_birth, new_phone_number, verification_result,
+      surname, firstname, middlename, date_of_birth, new_phone_number, new_address, verification_result,
       reference_code, status, created_at, updated_at
      FROM service_requests WHERE user_id = $1 ORDER BY created_at DESC`,
     [req.user.id]
