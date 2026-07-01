@@ -52,12 +52,14 @@ const env = {
   VTPASS_TIMEOUT_MS: Number(optional('VTPASS_TIMEOUT_MS', 15000)),
 
   PRICES: {
-    'nin_verification_nin': Number(optional('PRICE_NIN_VERIFY_NIN', 300)),
+    'nin_verification_nin': Number(optional('PRICE_NIN_VERIFY_NIN', 100)),
     'nin_verification_phone': Number(optional('PRICE_NIN_VERIFY_PHONE', 200)),
     'nin_verification_demographic': Number(optional('PRICE_NIN_VERIFY_DEMOGRAPHIC', 200)),
-    'bvn_verification_bvn': Number(optional('PRICE_BVN_VERIFY', 200)),
+    'bvn_verification_bvn': Number(optional('PRICE_BVN_VERIFY', 100)),
     'nin_modification_name': Number(optional('PRICE_NIN_MOD_NAME', 5000)),
-    'nin_modification_phone': Number(optional('PRICE_NIN_MOD_PHONE', 5000))
+    'nin_modification_phone': Number(optional('PRICE_NIN_MOD_PHONE', 5000)),
+    'nin_modification_address': Number(optional('PRICE_NIN_MOD_ADDRESS', 5000)),
+    'nin_modification_dob': Number(optional('PRICE_NIN_MOD_DOB', 5000))
   },
 
   RESET_TOKEN_TTL_MS: 60 * 60 * 1000
