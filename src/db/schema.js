@@ -1,8 +1,21 @@
-// src/db/schema.js
+    // src/db/schema.js
 //
 // Idempotent schema setup, run once at boot. CREATE TABLE IF NOT EXISTS +
 // ALTER ... ADD COLUMN IF NOT EXISTS means this is always safe to re-run,
 // including against a database created by an older version of this app.
+//
+// What changed in this pass (see SECURITY_AUDIT.md for the full reasoning):
+//   - Added indexes on every foreign key and on columns the app actually
+//     filters/sorts by (status, created_at, email lookups were already
+//     indexed via UNIQUE). Before this, every "WHERE user_id = $1" on
+//     service_requests/wallet_transactions was a sequential scan once the
+//     tables grew past a trivial size.
+//   - Added email_verified + email_verification_token columns (email
+//     verification logic is implemented; actually emailing the token still
+//     needs a provider — see README).
+//   - Added admin_action_log for accountability on admin actions.
+//   - Added processed_webhook_events to make webhook handling idempotent
+//     against Monnify's documented retry behavior.
 
 const pool = require('../config/db');
 const logger = require('../utils/logger');
@@ -34,7 +47,7 @@ async function initSchema() {
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       service_type TEXT NOT NULL CHECK (service_type IN ('nin','bvn')),
       request_type TEXT NOT NULL CHECK (request_type IN ('verification','modification')),
-      method TEXT NOT NULL CHECK (method IN ('nin','phone','demographic','bvn','name')),
+      method TEXT NOT NULL CHECK (method IN ('nin','phone','demographic','bvn','name','address','dob')),
       full_name TEXT NOT NULL,
       phone TEXT NOT NULL,
       reference_input TEXT,
@@ -43,6 +56,7 @@ async function initSchema() {
       middlename TEXT,
       date_of_birth TEXT,
       new_phone_number TEXT,
+      new_address TEXT,
       picture_base64 TEXT,
       verification_result JSONB,
       reference_code TEXT UNIQUE,
@@ -109,11 +123,23 @@ async function initSchema() {
     ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS middlename TEXT;
     ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS date_of_birth TEXT;
     ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS new_phone_number TEXT;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS new_address TEXT;
     ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS picture_base64 TEXT;
+  `);
+  // The method CHECK constraint was created inline (no explicit name), so
+  // Postgres auto-named it using the standard {table}_{column}_check
+  // pattern. Drop + recreate is how you widen an inline CHECK constraint —
+  // safe to re-run every boot, and existing rows are unaffected since
+  // their values were always within the old, narrower list anyway.
+  await pool.query(`
+    ALTER TABLE service_requests DROP CONSTRAINT IF EXISTS service_requests_method_check;
+    ALTER TABLE service_requests ADD CONSTRAINT service_requests_method_check
+      CHECK (method IN ('nin','phone','demographic','bvn','name','address','dob'));
   `);
   // verification_result used to be stored as TEXT (a JSON.stringify'd string).
   // JSONB is more correct — it validates the data is real JSON and lets you
-  // query inside it later. This cast is a safe no-op if already JSONB.
+  // query inside it later (e.g. WHERE verification_result->>'detail' = ...).
+  // This cast is a safe no-op if the column is already JSONB.
   await pool.query(`
     ALTER TABLE service_requests
     ALTER COLUMN verification_result TYPE JSONB USING verification_result::JSONB;
